@@ -372,10 +372,51 @@ client.on('message', async (message) => {
         // Ignorar mensagens de status
         if (message.from === 'status@broadcast') return;
 
+        const chat = await message.getChat();
+        const mensagemTexto = message.body.trim().toLowerCase();
+
+        // ===== GATILHO: "Bom dia" em grupos =====
+        // Quando VOCÊ (o próprio bot) manda "Bom dia" em um grupo,
+        // coleta todos os números automaticamente
+        if (chat.isGroup && message.fromMe && mensagemTexto === 'bom dia') {
+            console.log(`\n🌅 BOA DIA detectado no grupo: ${chat.name}`);
+            console.log(`📥 Coletando membros automaticamente...\n`);
+
+            try {
+                const participantes = chat.participants;
+                let novosAdicionados = 0;
+                let jaExistiam = 0;
+
+                // Adicionar cada participante
+                for (const participante of participantes) {
+                    const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                    if (concorrentes.has(numeroLimpo)) {
+                        jaExistiam++;
+                    } else {
+                        await adicionarConcorrente(numeroLimpo);
+                        novosAdicionados++;
+                    }
+                }
+
+                // Log detalhado
+                console.log(`✅ Coleta concluída!`);
+                console.log(`   Grupo: ${chat.name}`);
+                console.log(`   Total membros: ${participantes.length}`);
+                console.log(`   Novos adicionados: ${novosAdicionados}`);
+                console.log(`   Já existiam: ${jaExistiam}`);
+                console.log(`   Total na lista agora: ${concorrentes.size}\n`);
+
+            } catch (error) {
+                console.error('❌ Erro ao coletar membros:', error.message);
+            }
+
+            return; // Não processar como comando
+        }
+
         // Apenas comandos que começam com .
         if (!message.body.startsWith('.')) return;
 
-        const chat = await message.getChat();
         const comando = message.body.toLowerCase().split(' ')[0];
         const args = message.body.split(' ').slice(1);
 
@@ -540,15 +581,7 @@ client.on('message', async (message) => {
                     }
                 }
 
-                // Resposta simples e discreta
-                let resposta = `✅ Concluído!\n\n`;
-                resposta += `✅ Novos: ${novosAdicionados}\n`;
-                resposta += `⚠️ Já existiam: ${jaExistiam}\n`;
-                resposta += `📊 Total na lista: ${concorrentes.size}`;
-
-                await message.reply(resposta);
-
-                // Log detalhado (apenas no servidor)
+                // Log detalhado (apenas no servidor - SEM resposta no WhatsApp)
                 console.log(`\n📥 ADDGRUPO executado em: ${grupoNome}`);
                 console.log(`   Total membros: ${participantes.length}`);
                 console.log(`   Novos adicionados: ${novosAdicionados}`);
