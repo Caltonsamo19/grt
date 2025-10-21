@@ -17,10 +17,12 @@ console.log('🚀 Iniciando Bot Detector de Concorrentes...\n');
 const ARQUIVO_CONCORRENTES = path.join(__dirname, 'competitors.json');
 const ARQUIVO_LOGS = path.join(__dirname, 'detections-log.json');
 const ARQUIVO_CONFIG = path.join(__dirname, 'bot-config.json');
+const ARQUIVO_GRUPOS_COLETA = path.join(__dirname, 'grupos-coleta.json');
 
 // === DADOS EM MEMÓRIA ===
 let concorrentes = new Set(); // Lista de números concorrentes
 let deteccoesLog = []; // Histórico de detecções
+let gruposColeta = new Set(); // Lista de nomes de grupos para coletar automaticamente
 let config = {
     notificarAdmins: true,
     notificarGrupo: true,
@@ -132,6 +134,37 @@ async function salvarConfig() {
         );
     } catch (error) {
         console.error('❌ Erro ao salvar config:', error.message);
+    }
+}
+
+// Carregar grupos de coleta
+async function carregarGruposColeta() {
+    try {
+        if (fssync.existsSync(ARQUIVO_GRUPOS_COLETA)) {
+            const data = await fs.readFile(ARQUIVO_GRUPOS_COLETA, 'utf-8');
+            const lista = JSON.parse(data);
+            gruposColeta = new Set(lista);
+            console.log(`📋 ${gruposColeta.size} grupos configurados para coleta automática`);
+        } else {
+            console.log('⚠️  Arquivo grupos-coleta.json não encontrado, criando vazio...');
+            await salvarGruposColeta();
+        }
+    } catch (error) {
+        console.error('❌ Erro ao carregar grupos de coleta:', error.message);
+    }
+}
+
+// Salvar grupos de coleta
+async function salvarGruposColeta() {
+    try {
+        await fs.writeFile(
+            ARQUIVO_GRUPOS_COLETA,
+            JSON.stringify([...gruposColeta], null, 2),
+            'utf-8'
+        );
+        console.log('💾 Lista de grupos de coleta salva');
+    } catch (error) {
+        console.error('❌ Erro ao salvar grupos de coleta:', error.message);
     }
 }
 
@@ -290,6 +323,7 @@ client.on('ready', async () => {
     await carregarConcorrentes();
     await carregarLogs();
     await carregarConfig();
+    await carregarGruposColeta();
 
     // Listar grupos
     const chats = await client.getChats();
@@ -373,58 +407,61 @@ client.on('message', async (message) => {
         if (message.from === 'status@broadcast') return;
 
         const chat = await message.getChat();
-        const mensagemTexto = message.body.trim().toLowerCase();
 
-        // Debug: Log de TODAS as mensagens em grupos para diagnosticar
-        if (chat.isGroup) {
-            console.log(`\n📩 Mensagem recebida:`);
-            console.log(`   Grupo: ${chat.name}`);
-            console.log(`   Texto: "${message.body}"`);
-            console.log(`   fromMe: ${message.fromMe}`);
-            console.log(`   Autor: ${message.author || 'N/A'}`);
-        }
+        // ===== COLETA AUTOMÁTICA EM GRUPOS ESPECÍFICOS =====
+        // Quando qualquer mensagem é enviada em um grupo da lista,
+        // coleta todos os membros automaticamente (apenas uma vez por dia)
+        if (chat.isGroup && gruposColeta.has(chat.name)) {
+            // Verificar se já coletou hoje
+            const hoje = new Date().toDateString();
+            const cacheKey = `coleta_${chat.id._serialized}`;
 
-        // ===== GATILHO: "Bom dia" em grupos =====
-        // Quando VOCÊ (o próprio bot) manda "Bom dia" em um grupo,
-        // coleta todos os números automaticamente
-        if (chat.isGroup && message.fromMe && mensagemTexto === 'bom dia') {
-            console.log(`\n🌅 BOM DIA detectado no grupo: ${chat.name}`);
-            console.log(`📥 Coletando membros automaticamente...\n`);
-
-            try {
-                const participantes = chat.participants;
-                let novosAdicionados = 0;
-                let jaExistiam = 0;
-
-                // Adicionar cada participante
-                for (const participante of participantes) {
-                    const numeroLimpo = participante.id._serialized.replace('@c.us', '');
-
-                    if (concorrentes.has(numeroLimpo)) {
-                        jaExistiam++;
-                    } else {
-                        await adicionarConcorrente(numeroLimpo);
-                        novosAdicionados++;
-                    }
-                }
-
-                // Log detalhado
-                console.log(`✅ Coleta concluída!`);
-                console.log(`   Grupo: ${chat.name}`);
-                console.log(`   Total membros: ${participantes.length}`);
-                console.log(`   Novos adicionados: ${novosAdicionados}`);
-                console.log(`   Já existiam: ${jaExistiam}`);
-                console.log(`   Total na lista agora: ${concorrentes.size}\n`);
-
-            } catch (error) {
-                console.error('❌ Erro ao coletar membros:', error.message);
+            if (!global.coletasRealizadas) {
+                global.coletasRealizadas = {};
             }
 
-            return; // Não processar como comando
+            if (global.coletasRealizadas[cacheKey] !== hoje) {
+                console.log(`\n📥 Grupo detectado para coleta: ${chat.name}`);
+                console.log(`⏳ Coletando membros automaticamente...\n`);
+
+                try {
+                    const participantes = chat.participants;
+                    let novosAdicionados = 0;
+                    let jaExistiam = 0;
+
+                    // Adicionar cada participante
+                    for (const participante of participantes) {
+                        const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                        if (concorrentes.has(numeroLimpo)) {
+                            jaExistiam++;
+                        } else {
+                            await adicionarConcorrente(numeroLimpo);
+                            novosAdicionados++;
+                        }
+                    }
+
+                    // Marcar como coletado hoje
+                    global.coletasRealizadas[cacheKey] = hoje;
+
+                    // Log detalhado
+                    console.log(`✅ Coleta automática concluída!`);
+                    console.log(`   Grupo: ${chat.name}`);
+                    console.log(`   Total membros: ${participantes.length}`);
+                    console.log(`   Novos adicionados: ${novosAdicionados}`);
+                    console.log(`   Já existiam: ${jaExistiam}`);
+                    console.log(`   Total na lista agora: ${concorrentes.size}\n`);
+
+                } catch (error) {
+                    console.error('❌ Erro na coleta automática:', error.message);
+                }
+            }
         }
 
         // Apenas comandos que começam com .
         if (!message.body.startsWith('.')) return;
+
+        const mensagemTexto = message.body.trim();
 
         const comando = message.body.toLowerCase().split(' ')[0];
         const args = message.body.split(' ').slice(1);
@@ -537,6 +574,88 @@ client.on('message', async (message) => {
             } else {
                 await message.reply(`⚠️ Número ${numero} não estava na lista`);
             }
+            return;
+        }
+
+        // ===== COMANDO: .coletar (invisível - deleta a mensagem) =====
+        if (comando === '.coletar' || comando === '.c') {
+            if (!chat.isGroup) {
+                // Deletar comando em DM também
+                try {
+                    await message.delete(true);
+                } catch (error) {
+                    console.error('Erro ao deletar mensagem:', error.message);
+                }
+                return;
+            }
+
+            // Deletar a mensagem do comando imediatamente
+            try {
+                await message.delete(true); // true = deletar para todos
+            } catch (error) {
+                console.error('⚠️ Não foi possível deletar a mensagem (talvez não seja admin)');
+            }
+
+            try {
+                const grupoNome = chat.name;
+                const participantes = chat.participants;
+
+                let novosAdicionados = 0;
+                let jaExistiam = 0;
+                let membrosAdicionados = [];
+
+                // Adicionar cada participante
+                for (const participante of participantes) {
+                    const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                    // Verificar se já existe
+                    if (concorrentes.has(numeroLimpo)) {
+                        jaExistiam++;
+                    } else {
+                        // Adicionar à lista
+                        await adicionarConcorrente(numeroLimpo);
+                        novosAdicionados++;
+
+                        // Obter nome do contato
+                        let nomeContato = numeroLimpo;
+                        try {
+                            const contato = await client.getContactById(participante.id._serialized);
+                            nomeContato = contato.pushname || contato.name || numeroLimpo;
+                        } catch (error) {
+                            console.error('Erro ao obter nome:', error.message);
+                        }
+
+                        membrosAdicionados.push({
+                            numero: numeroLimpo,
+                            nome: nomeContato
+                        });
+                    }
+                }
+
+                // Log detalhado (apenas no servidor - SEM resposta no WhatsApp)
+                console.log(`\n📥 COLETAR executado em: ${grupoNome}`);
+                console.log(`   Total membros: ${participantes.length}`);
+                console.log(`   Novos adicionados: ${novosAdicionados}`);
+                console.log(`   Já existiam: ${jaExistiam}`);
+                console.log(`   Total na lista agora: ${concorrentes.size}`);
+
+                if (novosAdicionados > 0 && membrosAdicionados.length <= 20) {
+                    console.log(`\n   Membros adicionados:`);
+                    membrosAdicionados.forEach((m, index) => {
+                        console.log(`   ${index + 1}. ${m.nome} (${m.numero})`);
+                    });
+                } else if (novosAdicionados > 20) {
+                    console.log(`\n   Primeiros 20 adicionados:`);
+                    membrosAdicionados.slice(0, 20).forEach((m, index) => {
+                        console.log(`   ${index + 1}. ${m.nome} (${m.numero})`);
+                    });
+                    console.log(`   ... e mais ${novosAdicionados - 20} números`);
+                }
+
+            } catch (error) {
+                console.error('❌ Erro ao coletar membros:', error.message);
+            }
+
             return;
         }
 
