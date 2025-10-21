@@ -356,8 +356,13 @@ client.on('ready', async () => {
                 console.log(`📥 Coletando: ${grupo.name}`);
 
                 try {
-                    await grupo.fetchParticipants();
                     const participantes = grupo.participants;
+
+                    if (!participantes || participantes.length === 0) {
+                        console.log(`   ⚠️ Nenhum participante encontrado\n`);
+                        continue;
+                    }
+
                     let novosAdicionados = 0;
                     let jaExistiam = 0;
 
