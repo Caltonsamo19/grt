@@ -304,6 +304,7 @@ client.on('ready', async () => {
     console.log('📋 Comandos disponíveis:');
     console.log('   .status - Status do detector');
     console.log('   .scan - Escanear membros do grupo');
+    console.log('   .addgrupo - Adicionar TODOS os membros do grupo à lista');
     console.log('   .concorrentes - Lista de concorrentes');
     console.log('   .add <número> - Adicionar concorrente');
     console.log('   .remove <número> - Remover concorrente');
@@ -489,6 +490,92 @@ client.on('message', async (message) => {
             return;
         }
 
+        // ===== COMANDO: .addgrupo =====
+        if (comando === '.addgrupo') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            if (!chat.isGroup) {
+                await message.reply('❌ Este comando só funciona em grupos');
+                return;
+            }
+
+            await message.reply('📥 Coletando todos os membros do grupo...\n⏳ Aguarde...');
+
+            try {
+                const grupoNome = chat.name;
+                const participantes = chat.participants;
+
+                let novosAdicionados = 0;
+                let jaExistiam = 0;
+                let membrosAdicionados = [];
+
+                // Adicionar cada participante
+                for (const participante of participantes) {
+                    const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                    // Verificar se já existe
+                    if (concorrentes.has(numeroLimpo)) {
+                        jaExistiam++;
+                    } else {
+                        // Adicionar à lista
+                        await adicionarConcorrente(numeroLimpo);
+                        novosAdicionados++;
+
+                        // Obter nome do contato
+                        let nomeContato = numeroLimpo;
+                        try {
+                            const contato = await client.getContactById(participante.id._serialized);
+                            nomeContato = contato.pushname || contato.name || numeroLimpo;
+                        } catch (error) {
+                            console.error('Erro ao obter nome:', error.message);
+                        }
+
+                        membrosAdicionados.push({
+                            numero: numeroLimpo,
+                            nome: nomeContato
+                        });
+                    }
+                }
+
+                // Resposta simples e discreta
+                let resposta = `✅ Concluído!\n\n`;
+                resposta += `✅ Novos: ${novosAdicionados}\n`;
+                resposta += `⚠️ Já existiam: ${jaExistiam}\n`;
+                resposta += `📊 Total na lista: ${concorrentes.size}`;
+
+                await message.reply(resposta);
+
+                // Log detalhado (apenas no servidor)
+                console.log(`\n📥 ADDGRUPO executado em: ${grupoNome}`);
+                console.log(`   Total membros: ${participantes.length}`);
+                console.log(`   Novos adicionados: ${novosAdicionados}`);
+                console.log(`   Já existiam: ${jaExistiam}`);
+                console.log(`   Total na lista agora: ${concorrentes.size}`);
+
+                if (novosAdicionados > 0 && membrosAdicionados.length <= 20) {
+                    console.log(`\n   Membros adicionados:`);
+                    membrosAdicionados.forEach((m, index) => {
+                        console.log(`   ${index + 1}. ${m.nome} (${m.numero})`);
+                    });
+                } else if (novosAdicionados > 20) {
+                    console.log(`\n   Primeiros 20 adicionados:`);
+                    membrosAdicionados.slice(0, 20).forEach((m, index) => {
+                        console.log(`   ${index + 1}. ${m.nome} (${m.numero})`);
+                    });
+                    console.log(`   ... e mais ${novosAdicionados - 20} números`);
+                }
+
+            } catch (error) {
+                console.error('❌ Erro ao adicionar grupo:', error.message);
+                await message.reply('❌ Erro ao adicionar membros. Tente novamente.');
+            }
+
+            return;
+        }
+
         // ===== COMANDO: .scan =====
         if (comando === '.scan') {
             if (!isAdmin) {
@@ -670,6 +757,8 @@ client.on('message', async (message) => {
             resposta += `   Ver status do detector\n\n`;
             resposta += `🔍 .scan\n`;
             resposta += `   Escanear membros atuais do grupo\n\n`;
+            resposta += `📥 .addgrupo\n`;
+            resposta += `   Adicionar TODOS os membros do grupo à lista\n\n`;
             resposta += `📋 .concorrentes\n`;
             resposta += `   Listar concorrentes cadastrados\n\n`;
             resposta += `➕ .add <número>\n`;
