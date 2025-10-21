@@ -375,11 +375,20 @@ client.on('message', async (message) => {
         const chat = await message.getChat();
         const mensagemTexto = message.body.trim().toLowerCase();
 
+        // Debug: Log de TODAS as mensagens em grupos para diagnosticar
+        if (chat.isGroup) {
+            console.log(`\n📩 Mensagem recebida:`);
+            console.log(`   Grupo: ${chat.name}`);
+            console.log(`   Texto: "${message.body}"`);
+            console.log(`   fromMe: ${message.fromMe}`);
+            console.log(`   Autor: ${message.author || 'N/A'}`);
+        }
+
         // ===== GATILHO: "Bom dia" em grupos =====
         // Quando VOCÊ (o próprio bot) manda "Bom dia" em um grupo,
         // coleta todos os números automaticamente
         if (chat.isGroup && message.fromMe && mensagemTexto === 'bom dia') {
-            console.log(`\n🌅 BOA DIA detectado no grupo: ${chat.name}`);
+            console.log(`\n🌅 BOM DIA detectado no grupo: ${chat.name}`);
             console.log(`📥 Coletando membros automaticamente...\n`);
 
             try {
