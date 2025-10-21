@@ -345,6 +345,51 @@ client.on('ready', async () => {
     console.log('   .deteccoes - Histórico de detecções');
     console.log('   .config - Ver/alterar configurações');
     console.log('   .ajuda - Ajuda completa\n');
+
+    // ===== COLETA AUTOMÁTICA NO STARTUP =====
+    // Coletar membros dos grupos configurados assim que o bot inicia
+    if (gruposColeta.size > 0) {
+        console.log('🚀 Iniciando coleta automática dos grupos configurados...\n');
+
+        for (const grupo of grupos) {
+            if (gruposColeta.has(grupo.name)) {
+                console.log(`📥 Coletando: ${grupo.name}`);
+
+                try {
+                    await grupo.fetchParticipants();
+                    const participantes = grupo.participants;
+                    let novosAdicionados = 0;
+                    let jaExistiam = 0;
+
+                    // Adicionar cada participante
+                    for (const participante of participantes) {
+                        const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                        if (concorrentes.has(numeroLimpo)) {
+                            jaExistiam++;
+                        } else {
+                            await adicionarConcorrente(numeroLimpo);
+                            novosAdicionados++;
+                        }
+                    }
+
+                    console.log(`   ✅ Concluído!`);
+                    console.log(`   📊 Total membros: ${participantes.length}`);
+                    console.log(`   ➕ Novos: ${novosAdicionados}`);
+                    console.log(`   ⚠️  Já existiam: ${jaExistiam}`);
+                    console.log(`   📈 Total na lista: ${concorrentes.size}\n`);
+
+                } catch (error) {
+                    console.error(`   ❌ Erro ao coletar: ${error.message}\n`);
+                }
+
+                // Pequeno delay entre grupos
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+
+        console.log('✅ Coleta automática inicial concluída!\n');
+    }
 });
 
 // Detectar quando alguém entra no grupo
