@@ -998,18 +998,33 @@ client.on('message', async (message) => {
 
                 // Obter o author da mensagem respondida
                 let membroId = chat.isGroup ? quotedMsg.author : quotedMsg.from;
+                let participante = null;
 
-                // Se for @lid, converter para número real
+                // Se for @lid, precisamos encontrar o participante de forma diferente
                 if (membroId && membroId.includes('@lid')) {
+                    // Tentar encontrar pelo contato diretamente
                     try {
-                        const numberDetails = await client.getNumberId(membroId);
-                        if (numberDetails) {
-                            membroId = numberDetails._serialized;
+                        const contact = await quotedMsg.getContact();
+                        if (contact && contact.id && contact.id._serialized) {
+                            membroId = contact.id._serialized;
+                            participante = chat.participants.find(p => p.id._serialized === membroId);
                         }
                     } catch (error) {
-                        // Se falhar, tenta buscar pelo número original
-                        console.log('⚠️ Erro ao converter LID, tentando com ID original');
+                        console.log('⚠️ Erro ao obter contato do LID');
                     }
+
+                    // Se ainda não encontrou, tentar buscar nos participantes
+                    if (!participante) {
+                        // Buscar por todos os participantes que podem corresponder
+                        participante = chat.participants.find(p => {
+                            // Comparar o LID diretamente
+                            return p.id._serialized === membroId ||
+                                   p.id.user === membroId.split('@')[0];
+                        });
+                    }
+                } else {
+                    // Número normal @c.us - buscar diretamente
+                    participante = chat.participants.find(p => p.id._serialized === membroId);
                 }
 
                 // Obter ID do bot
@@ -1020,9 +1035,6 @@ client.on('message', async (message) => {
                     await message.reply('❌ Não é possível banir o próprio bot');
                     return;
                 }
-
-                // Obter informações do participante
-                const participante = chat.participants.find(p => p.id._serialized === membroId);
 
                 if (!participante) {
                     await message.reply('❌ Membro não encontrado no grupo');
