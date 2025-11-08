@@ -996,26 +996,24 @@ client.on('message', async (message) => {
                 // Obter a mensagem respondida
                 const quotedMsg = await message.getQuotedMessage();
 
-                // Em grupos, a propriedade author contém o ID de quem enviou
-                let membroId;
+                // Obter o author da mensagem respondida
+                let membroId = chat.isGroup ? quotedMsg.author : quotedMsg.from;
 
-                if (chat.isGroup) {
-                    // Em grupos, usar author que contém o ID completo
-                    membroId = quotedMsg.author;
-                } else {
-                    // Em DM, usar from
-                    membroId = quotedMsg.from;
+                // Se for @lid, converter para número real
+                if (membroId && membroId.includes('@lid')) {
+                    try {
+                        const numberDetails = await client.getNumberId(membroId);
+                        if (numberDetails) {
+                            membroId = numberDetails._serialized;
+                        }
+                    } catch (error) {
+                        // Se falhar, tenta buscar pelo número original
+                        console.log('⚠️ Erro ao converter LID, tentando com ID original');
+                    }
                 }
-
-                // Log para debug
-                console.log('\n🔍 DEBUG .ban:');
-                console.log('   Quoted message author:', quotedMsg.author);
-                console.log('   Quoted message from:', quotedMsg.from);
-                console.log('   Membro ID escolhido:', membroId);
 
                 // Obter ID do bot
                 const botNumber = client.info.wid._serialized;
-                console.log('   Bot ID:', botNumber);
 
                 // Verificar se não está tentando banir o bot
                 if (membroId === botNumber) {
@@ -1024,14 +1022,10 @@ client.on('message', async (message) => {
                 }
 
                 // Obter informações do participante
-                console.log('   Participantes no grupo:', chat.participants.length);
-                console.log('   IDs dos participantes:', chat.participants.map(p => p.id._serialized));
-
                 const participante = chat.participants.find(p => p.id._serialized === membroId);
-                console.log('   Participante encontrado:', participante ? 'SIM' : 'NÃO');
 
                 if (!participante) {
-                    await message.reply(`❌ Membro não encontrado no grupo\n\nDebug:\nID buscado: ${membroId}\nTotal participantes: ${chat.participants.length}`);
+                    await message.reply('❌ Membro não encontrado no grupo');
                     return;
                 }
 
