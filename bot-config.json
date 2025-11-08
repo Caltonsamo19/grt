@@ -1,0 +1,7 @@
+{
+  "notificarAdmins": true,
+  "notificarGrupo": true,
+  "removerAutomatico": true,
+  "notificarVerificacaoDiaria": true,
+  "mensagemCustomizada": null
+}

@@ -4,6 +4,7 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs').promises;
 const fssync = require('fs');
 const path = require('path');
+const cron = require('node-cron');
 
 // ===================================
 // 🔍 BOT DETECTOR DE CONCORRENTES
@@ -27,6 +28,7 @@ let config = {
     notificarAdmins: true,
     notificarGrupo: true,
     removerAutomatico: false,
+    notificarVerificacaoDiaria: true,
     mensagemCustomizada: null
 };
 
@@ -304,6 +306,196 @@ async function removerMembroGrupo(grupoId, membroId) {
     }
 }
 
+// Verificação diária de concorrentes em todos os grupos
+async function verificacaoDiariaGrupos() {
+    console.log('\n🕐 === VERIFICAÇÃO DIÁRIA AUTOMÁTICA INICIADA ===');
+    console.log(`⏰ Horário: ${new Date().toLocaleString('pt-BR')}\n`);
+
+    try {
+        const chats = await client.getChats();
+        const grupos = chats.filter(chat => chat.isGroup);
+
+        console.log(`👥 Verificando ${grupos.length} grupos...\n`);
+
+        let totalConcorrentesEncontrados = 0;
+        let totalRemovidos = 0;
+        let totalProtegidos = 0;
+
+        for (const grupo of grupos) {
+            const grupoId = grupo.id._serialized;
+            const grupoNome = grupo.name;
+            const participantes = grupo.participants;
+
+            console.log(`📍 Verificando: ${grupoNome}`);
+
+            let concorrentesNoGrupo = [];
+
+            // Verificar cada participante
+            for (const participante of participantes) {
+                const numeroLimpo = participante.id._serialized.replace('@c.us', '');
+
+                if (isConcorrente(numeroLimpo)) {
+                    const isAdminGrupo = participante.isAdmin || participante.isSuperAdmin;
+
+                    // Obter nome do contato
+                    let nomeContato = numeroLimpo;
+                    try {
+                        const contato = await client.getContactById(participante.id._serialized);
+                        nomeContato = contato.pushname || contato.name || numeroLimpo;
+                    } catch (error) {
+                        // Silencioso
+                    }
+
+                    concorrentesNoGrupo.push({
+                        id: participante.id._serialized,
+                        numero: numeroLimpo,
+                        nome: nomeContato,
+                        isAdmin: isAdminGrupo
+                    });
+                }
+            }
+
+            if (concorrentesNoGrupo.length > 0) {
+                console.log(`   🚨 Encontrados ${concorrentesNoGrupo.length} concorrente(s):`);
+
+                for (const concorrente of concorrentesNoGrupo) {
+                    totalConcorrentesEncontrados++;
+
+                    console.log(`   - ${concorrente.nome} (${concorrente.numero})`);
+
+                    // Se for admin, apenas notificar
+                    if (concorrente.isAdmin) {
+                        console.log(`     👑 ADMIN - Apenas notificado (não removido)`);
+                        totalProtegidos++;
+
+                        await notificarAdmins(
+                            grupoId,
+                            grupoNome,
+                            concorrente.id,
+                            concorrente.nome,
+                            true
+                        );
+
+                        await registrarDeteccao(
+                            grupoId,
+                            grupoNome,
+                            concorrente.id,
+                            concorrente.nome,
+                            '⚠️ Verificação diária - Concorrente é ADMIN (não removido)'
+                        );
+                    }
+                    // Se não for admin e remoção automática estiver ativa
+                    else if (config.removerAutomatico) {
+                        const removido = await removerMembroGrupo(grupoId, concorrente.id);
+
+                        if (removido) {
+                            console.log(`     ✅ REMOVIDO automaticamente`);
+                            totalRemovidos++;
+
+                            await notificarAdmins(
+                                grupoId,
+                                grupoNome,
+                                concorrente.id,
+                                concorrente.nome,
+                                false
+                            );
+
+                            await registrarDeteccao(
+                                grupoId,
+                                grupoNome,
+                                concorrente.id,
+                                concorrente.nome,
+                                '🔴 Verificação diária - Removido automaticamente'
+                            );
+                        } else {
+                            console.log(`     ❌ Falha ao remover`);
+                        }
+
+                        // Delay entre remoções
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                    // Remoção automática desativada
+                    else {
+                        console.log(`     ⚠️ Apenas notificado (remoção automática desativada)`);
+
+                        await notificarAdmins(
+                            grupoId,
+                            grupoNome,
+                            concorrente.id,
+                            concorrente.nome,
+                            false
+                        );
+
+                        await registrarDeteccao(
+                            grupoId,
+                            grupoNome,
+                            concorrente.id,
+                            concorrente.nome,
+                            '⚠️ Verificação diária - Apenas notificado'
+                        );
+                    }
+                }
+            } else {
+                console.log(`   ✅ Grupo limpo`);
+            }
+
+            // Delay entre grupos
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        console.log('\n🏁 === VERIFICAÇÃO DIÁRIA CONCLUÍDA ===');
+        console.log(`📊 Resumo:`);
+        console.log(`   • Grupos verificados: ${grupos.length}`);
+        console.log(`   • Concorrentes encontrados: ${totalConcorrentesEncontrados}`);
+        console.log(`   • Removidos: ${totalRemovidos}`);
+        console.log(`   • Protegidos (admins): ${totalProtegidos}`);
+        console.log(`   • Próxima verificação: Amanhã às 00:00\n`);
+
+        // ===== ENVIAR NOTIFICAÇÃO EM CADA GRUPO =====
+        if (config.notificarVerificacaoDiaria) {
+            console.log('📢 Enviando notificações de conclusão nos grupos...\n');
+
+            for (const grupo of grupos) {
+                try {
+                    const chat = await client.getChatById(grupo.id._serialized);
+
+                    let mensagem = `🛡️ *VERIFICAÇÃO AUTOMÁTICA CONCLUÍDA*\n\n`;
+                    mensagem += `⏰ *Horário:* ${new Date().toLocaleString('pt-BR')}\n`;
+                    mensagem += `📊 *Status:* Grupo verificado com sucesso\n\n`;
+
+                    // Mensagem personalizada baseada no resultado
+                    const grupoTemConcorrentes = totalConcorrentesEncontrados > 0 &&
+                        grupo.participants.some(p => isConcorrente(p.id._serialized.replace('@c.us', '')));
+
+                    if (grupoTemConcorrentes) {
+                        mensagem += `⚠️ *Atenção:* Concorrentes detectados neste grupo foram tratados\n`;
+                    } else {
+                        mensagem += `✅ *Resultado:* Nenhum concorrente detectado neste grupo\n`;
+                    }
+
+                    mensagem += `\n🔍 Próxima verificação: Amanhã às 00:00\n`;
+                    mensagem += `\n_Bot Detector de Concorrentes - Proteção ativa 24/7_`;
+
+                    await chat.sendMessage(mensagem);
+                    console.log(`   ✅ Notificação enviada: ${grupo.name}`);
+
+                    // Delay entre envios
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                } catch (error) {
+                    console.error(`   ❌ Erro ao notificar grupo ${grupo.name}:`, error.message);
+                }
+            }
+
+            console.log('\n✅ Todas as notificações enviadas!\n');
+        } else {
+            console.log('📢 Notificações nos grupos desativadas (config.notificarVerificacaoDiaria = false)\n');
+        }
+
+    } catch (error) {
+        console.error('❌ Erro na verificação diária:', error.message);
+    }
+}
+
 // ===================================
 // 📱 EVENTOS DO WHATSAPP
 // ===================================
@@ -338,6 +530,11 @@ client.on('ready', async () => {
     console.log('📋 Comandos disponíveis:');
     console.log('   .status - Status do detector');
     console.log('   .scan - Escanear membros do grupo');
+    console.log('   .verificar - Verificação completa em todos os grupos');
+    console.log('   .ban - Banir membro (responda à mensagem dele)');
+    console.log('   .a - Abrir grupo (todos podem enviar mensagens)');
+    console.log('   .f [motivo] - Fechar grupo (apenas admins podem enviar)');
+    console.log('   .todos [mensagem] - Mencionar todos os membros');
     console.log('   .addgrupo - Adicionar TODOS os membros do grupo à lista');
     console.log('   .concorrentes - Lista de concorrentes');
     console.log('   .add <número> - Adicionar concorrente');
@@ -395,6 +592,16 @@ client.on('ready', async () => {
 
         console.log('✅ Coleta automática inicial concluída!\n');
     }
+
+    // ===== AGENDAR VERIFICAÇÃO DIÁRIA ÀS 00:00 =====
+    cron.schedule('0 0 * * *', async () => {
+        console.log('\n⏰ Agendamento disparado - Iniciando verificação diária...');
+        await verificacaoDiariaGrupos();
+    }, {
+        timezone: "America/Sao_Paulo"
+    });
+
+    console.log('📅 Verificação diária agendada para 00:00 (horário de Brasília)\n');
 });
 
 // Detectar quando alguém entra no grupo
@@ -599,8 +806,148 @@ client.on('message', async (message) => {
                 return;
             }
 
+            // Adicionar à lista
             await adicionarConcorrente(numero);
-            await message.reply(`✅ Concorrente adicionado!\n📱 ${numero}\n\nTotal: ${concorrentes.size} números`);
+            await message.reply(`✅ Concorrente adicionado!\n📱 ${numero}\n\n⏳ Verificando grupos e removendo automaticamente...`);
+
+            // Buscar e remover de todos os grupos
+            try {
+                const chats = await client.getChats();
+                const grupos = chats.filter(c => c.isGroup);
+
+                let gruposEncontrados = [];
+                let removidos = 0;
+                let protegidos = 0;
+
+                for (const grupo of grupos) {
+                    const participante = grupo.participants.find(p =>
+                        p.id._serialized.replace('@c.us', '') === numero
+                    );
+
+                    if (participante) {
+                        const isAdminGrupo = participante.isAdmin || participante.isSuperAdmin;
+
+                        // Obter nome do contato
+                        let nomeContato = numero;
+                        try {
+                            const contato = await client.getContactById(participante.id._serialized);
+                            nomeContato = contato.pushname || contato.name || numero;
+                        } catch (error) {
+                            // Silencioso
+                        }
+
+                        if (isAdminGrupo) {
+                            // É admin - apenas notificar
+                            protegidos++;
+                            gruposEncontrados.push({
+                                nome: grupo.name,
+                                acao: '👑 ADMIN (não removido)'
+                            });
+
+                            await notificarAdmins(
+                                grupo.id._serialized,
+                                grupo.name,
+                                participante.id._serialized,
+                                nomeContato,
+                                true
+                            );
+
+                            await registrarDeteccao(
+                                grupo.id._serialized,
+                                grupo.name,
+                                participante.id._serialized,
+                                nomeContato,
+                                '⚠️ Adicionado via .add - É ADMIN (não removido)'
+                            );
+                        } else if (config.removerAutomatico) {
+                            // Remover automaticamente
+                            const removido = await removerMembroGrupo(grupo.id._serialized, participante.id._serialized);
+
+                            if (removido) {
+                                removidos++;
+                                gruposEncontrados.push({
+                                    nome: grupo.name,
+                                    acao: '✅ Removido'
+                                });
+
+                                await notificarAdmins(
+                                    grupo.id._serialized,
+                                    grupo.name,
+                                    participante.id._serialized,
+                                    nomeContato,
+                                    false
+                                );
+
+                                await registrarDeteccao(
+                                    grupo.id._serialized,
+                                    grupo.name,
+                                    participante.id._serialized,
+                                    nomeContato,
+                                    '🔴 Adicionado via .add - Removido automaticamente'
+                                );
+
+                                // Delay entre remoções
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                            } else {
+                                gruposEncontrados.push({
+                                    nome: grupo.name,
+                                    acao: '❌ Falha ao remover'
+                                });
+                            }
+                        } else {
+                            // Remoção automática desativada
+                            gruposEncontrados.push({
+                                nome: grupo.name,
+                                acao: '⚠️ Encontrado (remoção desativada)'
+                            });
+
+                            await notificarAdmins(
+                                grupo.id._serialized,
+                                grupo.name,
+                                participante.id._serialized,
+                                nomeContato,
+                                false
+                            );
+
+                            await registrarDeteccao(
+                                grupo.id._serialized,
+                                grupo.name,
+                                participante.id._serialized,
+                                nomeContato,
+                                '⚠️ Adicionado via .add - Apenas notificado (remoção desativada)'
+                            );
+                        }
+                    }
+                }
+
+                // Relatório final
+                let relatorio = `\n📊 *RELATÓRIO DE VERIFICAÇÃO*\n\n`;
+                relatorio += `📱 Número: ${numero}\n`;
+                relatorio += `👥 Grupos verificados: ${grupos.length}\n`;
+                relatorio += `🚨 Encontrado em: ${gruposEncontrados.length} grupo(s)\n`;
+
+                if (gruposEncontrados.length > 0) {
+                    relatorio += `\n*Detalhes:*\n`;
+                    gruposEncontrados.forEach((g, index) => {
+                        relatorio += `${index + 1}. ${g.nome}\n   ${g.acao}\n`;
+                    });
+
+                    relatorio += `\n📊 *Resumo:*\n`;
+                    relatorio += `   • Removidos: ${removidos}\n`;
+                    relatorio += `   • Protegidos (admins): ${protegidos}\n`;
+                } else {
+                    relatorio += `\n✅ Este número não está presente em nenhum grupo monitorado`;
+                }
+
+                relatorio += `\n\n💾 Total na lista: ${concorrentes.size} números`;
+
+                await message.reply(relatorio);
+
+            } catch (error) {
+                console.error('❌ Erro ao verificar grupos:', error.message);
+                await message.reply('❌ Erro ao verificar grupos. Número foi adicionado mas verificação falhou.');
+            }
+
             return;
         }
 
@@ -624,6 +971,244 @@ client.on('message', async (message) => {
             } else {
                 await message.reply(`⚠️ Número ${numero} não estava na lista`);
             }
+            return;
+        }
+
+        // ===== COMANDO: .ban =====
+        if (comando === '.ban') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            if (!chat.isGroup) {
+                await message.reply('❌ Este comando só funciona em grupos');
+                return;
+            }
+
+            // Verificar se a mensagem é uma resposta
+            if (!message.hasQuotedMsg) {
+                await message.reply('❌ Você precisa responder à mensagem da pessoa que deseja banir\n\n*Como usar:*\nResponda à mensagem do membro e digite `.ban`');
+                return;
+            }
+
+            try {
+                // Obter a mensagem respondida
+                const quotedMsg = await message.getQuotedMessage();
+                const membroId = quotedMsg.from || quotedMsg.author;
+
+                // Verificar se não é mensagem do próprio bot
+                if (membroId === (await client.getContactById(message.from)).id._serialized) {
+                    await message.reply('❌ Não é possível banir o próprio bot');
+                    return;
+                }
+
+                // Obter informações do participante
+                const participante = chat.participants.find(p => p.id._serialized === membroId);
+
+                if (!participante) {
+                    await message.reply('❌ Membro não encontrado no grupo');
+                    return;
+                }
+
+                // Verificar se o membro é admin
+                const isMembroAdmin = participante.isAdmin || participante.isSuperAdmin;
+
+                if (isMembroAdmin) {
+                    await message.reply('❌ Não é possível banir administradores do grupo\n\n🛡️ *Proteção ativa:* Admins não podem ser removidos pelo bot');
+                    return;
+                }
+
+                // Obter informações do contato
+                const numeroLimpo = membroId.replace('@c.us', '');
+                let nomeContato = numeroLimpo;
+                try {
+                    const contato = await client.getContactById(membroId);
+                    nomeContato = contato.pushname || contato.name || numeroLimpo;
+                } catch (error) {
+                    // Silencioso
+                }
+
+                // Perguntar se deseja adicionar à lista de concorrentes
+                let adicionarNaLista = false;
+                if (args.length > 0 && args[0].toLowerCase() === 'add') {
+                    adicionarNaLista = true;
+                }
+
+                // Remover do grupo
+                const removido = await removerMembroGrupo(chat.id._serialized, membroId);
+
+                if (removido) {
+                    let respostaBan = `✅ *MEMBRO BANIDO*\n\n`;
+                    respostaBan += `👤 *Nome:* ${nomeContato}\n`;
+                    respostaBan += `📱 *Número:* ${numeroLimpo}\n`;
+                    respostaBan += `📍 *Grupo:* ${chat.name}\n`;
+                    respostaBan += `⚡ *Ação:* Removido do grupo\n`;
+
+                    // Se solicitado, adicionar à lista de concorrentes
+                    if (adicionarNaLista) {
+                        if (!concorrentes.has(numeroLimpo)) {
+                            await adicionarConcorrente(numeroLimpo);
+                            respostaBan += `\n📋 *Adicionado à lista de concorrentes*\n`;
+                            respostaBan += `🔴 Este número será bloqueado em TODOS os grupos`;
+                        } else {
+                            respostaBan += `\n⚠️ *Já estava na lista de concorrentes*`;
+                        }
+                    } else {
+                        respostaBan += `\n💡 *Dica:* Use \`.ban add\` para adicionar à lista de concorrentes`;
+                    }
+
+                    await message.reply(respostaBan);
+
+                    // Registrar no log
+                    await registrarDeteccao(
+                        chat.id._serialized,
+                        chat.name,
+                        membroId,
+                        nomeContato,
+                        adicionarNaLista ?
+                            `🔨 Banido via .ban + adicionado à lista de concorrentes` :
+                            `🔨 Banido via .ban (não adicionado à lista)`
+                    );
+
+                    console.log(`\n🔨 MEMBRO BANIDO VIA COMANDO`);
+                    console.log(`📍 Grupo: ${chat.name}`);
+                    console.log(`📱 Número: ${numeroLimpo}`);
+                    console.log(`👤 Nome: ${nomeContato}`);
+                    console.log(`📋 Adicionado à lista: ${adicionarNaLista ? 'SIM' : 'NÃO'}\n`);
+
+                } else {
+                    await message.reply('❌ Erro ao remover membro. Verifique se o bot tem permissões de administrador.');
+                }
+
+            } catch (error) {
+                console.error('❌ Erro no comando .ban:', error.message);
+                await message.reply('❌ Erro ao executar comando. Tente novamente.');
+            }
+
+            return;
+        }
+
+        // ===== COMANDO: .a (ABRIR GRUPO) =====
+        if (comando === '.a') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            if (!chat.isGroup) {
+                await message.reply('❌ Este comando só funciona em grupos');
+                return;
+            }
+
+            try {
+                // Abrir o grupo (permitir que qualquer um envie mensagens)
+                await chat.setMessagesAdminsOnly(false);
+
+                await message.reply('✅ *GRUPO ABERTO*\n\n🔓 Todos os membros podem enviar mensagens agora');
+
+                console.log(`\n🔓 GRUPO ABERTO`);
+                console.log(`📍 Grupo: ${chat.name}`);
+                console.log(`👨‍💼 Por: ${(await message.getContact()).pushname || 'Admin'}\n`);
+
+            } catch (error) {
+                console.error('❌ Erro ao abrir grupo:', error.message);
+                await message.reply('❌ Erro ao abrir o grupo. Verifique se o bot tem permissões de administrador.');
+            }
+
+            return;
+        }
+
+        // ===== COMANDO: .f (FECHAR GRUPO) =====
+        if (comando === '.f') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            if (!chat.isGroup) {
+                await message.reply('❌ Este comando só funciona em grupos');
+                return;
+            }
+
+            try {
+                // Fechar o grupo (apenas admins podem enviar mensagens)
+                await chat.setMessagesAdminsOnly(true);
+
+                // Obter o motivo (tudo após o comando .f)
+                const motivo = args.join(' ').trim();
+
+                let respostaFechamento = '🔒 *GRUPO FECHADO*\n\n';
+                respostaFechamento += '⚠️ Apenas administradores podem enviar mensagens agora';
+
+                if (motivo) {
+                    respostaFechamento += `\n\n📝 *Motivo:*\n_${motivo}_`;
+                }
+
+                await message.reply(respostaFechamento);
+
+                console.log(`\n🔒 GRUPO FECHADO`);
+                console.log(`📍 Grupo: ${chat.name}`);
+                console.log(`👨‍💼 Por: ${(await message.getContact()).pushname || 'Admin'}`);
+                if (motivo) {
+                    console.log(`📝 Motivo: ${motivo}`);
+                }
+                console.log('');
+
+            } catch (error) {
+                console.error('❌ Erro ao fechar grupo:', error.message);
+                await message.reply('❌ Erro ao fechar o grupo. Verifique se o bot tem permissões de administrador.');
+            }
+
+            return;
+        }
+
+        // ===== COMANDO: .todos (MENCIONAR TODOS) =====
+        if (comando === '.todos' || comando === '.everyone' || comando === '.all') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            if (!chat.isGroup) {
+                await message.reply('❌ Este comando só funciona em grupos');
+                return;
+            }
+
+            try {
+                // Obter todos os participantes do grupo
+                const participantes = chat.participants.map(p => p.id._serialized);
+
+                // Obter mensagem personalizada (tudo após o comando)
+                const mensagemPersonalizada = args.join(' ').trim();
+
+                let mensagemFinal = '📢 *ATENÇÃO GERAL* 📢\n\n';
+
+                if (mensagemPersonalizada) {
+                    mensagemFinal += mensagemPersonalizada;
+                } else {
+                    mensagemFinal += 'Todos foram mencionados!';
+                }
+
+                // Enviar mensagem mencionando todos
+                await chat.sendMessage(mensagemFinal, {
+                    mentions: participantes
+                });
+
+                console.log(`\n📢 MENÇÃO EM MASSA`);
+                console.log(`📍 Grupo: ${chat.name}`);
+                console.log(`👥 Mencionados: ${participantes.length} pessoas`);
+                console.log(`👨‍💼 Por: ${(await message.getContact()).pushname || 'Admin'}`);
+                if (mensagemPersonalizada) {
+                    console.log(`💬 Mensagem: ${mensagemPersonalizada}`);
+                }
+                console.log('');
+
+            } catch (error) {
+                console.error('❌ Erro ao mencionar todos:', error.message);
+                await message.reply('❌ Erro ao mencionar todos. Tente novamente.');
+            }
+
             return;
         }
 
@@ -875,6 +1460,26 @@ client.on('message', async (message) => {
             return;
         }
 
+        // ===== COMANDO: .verificar =====
+        if (comando === '.verificar') {
+            if (!isAdmin) {
+                await message.reply('❌ Apenas administradores podem usar este comando');
+                return;
+            }
+
+            await message.reply('🔍 Iniciando verificação completa de todos os grupos...\n⏳ Isso pode levar alguns minutos...');
+
+            try {
+                await verificacaoDiariaGrupos();
+                await message.reply('✅ Verificação completa finalizada!\n\n📊 Verifique o console para ver o relatório detalhado.');
+            } catch (error) {
+                console.error('❌ Erro ao executar verificação:', error.message);
+                await message.reply('❌ Erro ao executar verificação. Tente novamente.');
+            }
+
+            return;
+        }
+
         // ===== COMANDO: .deteccoes =====
         if (comando === '.deteccoes' || comando === '.detecoes') {
             if (!isAdmin) {
@@ -921,11 +1526,13 @@ client.on('message', async (message) => {
                 let resposta = `⚙️ *CONFIGURAÇÕES*\n\n`;
                 resposta += `1. Notificar admins (DM): ${config.notificarAdmins ? '✅' : '❌'}\n`;
                 resposta += `2. Notificar no grupo: ${config.notificarGrupo ? '✅' : '❌'}\n`;
-                resposta += `3. Remover automático: ${config.removerAutomatico ? '✅ ATIVO' : '❌ Desativado'}\n\n`;
+                resposta += `3. Remover automático: ${config.removerAutomatico ? '✅ ATIVO' : '❌ Desativado'}\n`;
+                resposta += `4. Notificar verificação diária: ${config.notificarVerificacaoDiaria ? '✅' : '❌'}\n\n`;
                 resposta += `*Como alterar:*\n`;
                 resposta += `.config admins on/off\n`;
                 resposta += `.config grupo on/off\n`;
-                resposta += `.config remover on/off`;
+                resposta += `.config remover on/off\n`;
+                resposta += `.config verificacao on/off`;
 
                 await message.reply(resposta);
                 return;
@@ -953,8 +1560,12 @@ client.on('message', async (message) => {
                 config.removerAutomatico = ativar;
                 await salvarConfig();
                 await message.reply(`✅ Remoção automática: ${ativar ? '🔴 ATIVADA' : '❌ Desativada'}\n\n${ativar ? '⚠️ Concorrentes serão removidos automaticamente!' : ''}`);
+            } else if (opcao === 'verificacao') {
+                config.notificarVerificacaoDiaria = ativar;
+                await salvarConfig();
+                await message.reply(`✅ Notificação de verificação diária: ${ativar ? '✅ ATIVADA' : '❌ Desativada'}\n\n${ativar ? '📢 Os grupos receberão notificação após cada verificação diária às 00:00' : '🔕 Os grupos não receberão notificação das verificações diárias'}`);
             } else {
-                await message.reply('❌ Opção inválida. Use: admins, grupo ou remover');
+                await message.reply('❌ Opção inválida. Use: admins, grupo, remover ou verificacao');
             }
 
             return;
@@ -968,6 +1579,19 @@ client.on('message', async (message) => {
             resposta += `   Ver status do detector\n\n`;
             resposta += `🔍 .scan\n`;
             resposta += `   Escanear membros atuais do grupo\n\n`;
+            resposta += `🕐 .verificar\n`;
+            resposta += `   Executar verificação completa em todos os grupos\n\n`;
+            resposta += `🔨 .ban\n`;
+            resposta += `   Banir membro (responda à mensagem dele)\n`;
+            resposta += `   Use .ban add para adicionar à lista\n\n`;
+            resposta += `🔓 .a\n`;
+            resposta += `   Abrir grupo (todos podem enviar mensagens)\n\n`;
+            resposta += `🔒 .f [motivo]\n`;
+            resposta += `   Fechar grupo (apenas admins podem enviar)\n`;
+            resposta += `   Exemplo: .f Voltamos Brevemente\n\n`;
+            resposta += `📢 .todos [mensagem]\n`;
+            resposta += `   Mencionar todos os membros do grupo\n`;
+            resposta += `   Exemplo: .todos Reunião às 15h!\n\n`;
             resposta += `📥 .addgrupo\n`;
             resposta += `   Adicionar TODOS os membros do grupo à lista\n\n`;
             resposta += `📋 .concorrentes\n`;
@@ -983,7 +1607,8 @@ client.on('message', async (message) => {
             resposta += `❓ .ajuda\n`;
             resposta += `   Mostrar esta ajuda\n\n`;
             resposta += `*Como funciona:*\n`;
-            resposta += `O bot monitora todos os grupos e detecta automaticamente quando um número da lista de concorrentes entra em algum grupo.`;
+            resposta += `O bot monitora todos os grupos e detecta automaticamente quando um número da lista de concorrentes entra em algum grupo.\n\n`;
+            resposta += `🕐 *Verificação automática diária às 00:00*`;
 
             await message.reply(resposta);
             return;
