@@ -996,12 +996,26 @@ client.on('message', async (message) => {
                 // Obter a mensagem respondida
                 const quotedMsg = await message.getQuotedMessage();
 
-                // Em grupos, usar 'author', em DM usar 'from'
-                const membroId = quotedMsg.author || quotedMsg.from;
+                // Em grupos, a propriedade author contém o ID de quem enviou
+                let membroId;
+
+                if (chat.isGroup) {
+                    // Em grupos, usar author que contém o ID completo
+                    membroId = quotedMsg.author;
+                } else {
+                    // Em DM, usar from
+                    membroId = quotedMsg.from;
+                }
+
+                // Log para debug
+                console.log('\n🔍 DEBUG .ban:');
+                console.log('   Quoted message author:', quotedMsg.author);
+                console.log('   Quoted message from:', quotedMsg.from);
+                console.log('   Membro ID escolhido:', membroId);
 
                 // Obter ID do bot
-                const botInfo = await client.getState();
-                const botNumber = (await client.info).wid._serialized;
+                const botNumber = client.info.wid._serialized;
+                console.log('   Bot ID:', botNumber);
 
                 // Verificar se não está tentando banir o bot
                 if (membroId === botNumber) {
@@ -1010,10 +1024,14 @@ client.on('message', async (message) => {
                 }
 
                 // Obter informações do participante
+                console.log('   Participantes no grupo:', chat.participants.length);
+                console.log('   IDs dos participantes:', chat.participants.map(p => p.id._serialized));
+
                 const participante = chat.participants.find(p => p.id._serialized === membroId);
+                console.log('   Participante encontrado:', participante ? 'SIM' : 'NÃO');
 
                 if (!participante) {
-                    await message.reply('❌ Membro não encontrado no grupo');
+                    await message.reply(`❌ Membro não encontrado no grupo\n\nDebug:\nID buscado: ${membroId}\nTotal participantes: ${chat.participants.length}`);
                     return;
                 }
 
