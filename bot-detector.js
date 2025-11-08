@@ -995,10 +995,16 @@ client.on('message', async (message) => {
             try {
                 // Obter a mensagem respondida
                 const quotedMsg = await message.getQuotedMessage();
-                const membroId = quotedMsg.from || quotedMsg.author;
 
-                // Verificar se não é mensagem do próprio bot
-                if (membroId === (await client.getContactById(message.from)).id._serialized) {
+                // Em grupos, usar 'author', em DM usar 'from'
+                const membroId = quotedMsg.author || quotedMsg.from;
+
+                // Obter ID do bot
+                const botInfo = await client.getState();
+                const botNumber = (await client.info).wid._serialized;
+
+                // Verificar se não está tentando banir o bot
+                if (membroId === botNumber) {
                     await message.reply('❌ Não é possível banir o próprio bot');
                     return;
                 }
