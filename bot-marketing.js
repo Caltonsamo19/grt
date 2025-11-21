@@ -47,12 +47,12 @@ Entre agora e comece a comprar de forma *rápida e automatizada*:
     linkCanal: 'https://whatsapp.com/channel/0029VbAuXG6AjPXGUXTcOm2k',
     mensagemFinal: `\n_Automatize suas Vendas de Megabytes connosco!_`,
     delayEntreMensagens: 5000, // 5 segundos entre as 2 mensagens (5000ms)
-    delayEntreEnvios: 30000, // 30 segundos entre contatos (30000ms)
-    delayEntreLotes: 300000, // 5 minutos entre lotes (300000ms)
-    tamanhoLote: 20, // 20 mensagens por lote
-    horarioInicio: '08:00', // Início do envio
-    horarioFim: '22:00', // Fim do envio
-    enviarApenasDuranteHorario: true
+    delayEntreEnvios: 60000, // 60 segundos entre contatos (60000ms) - ANTI-BAN
+    delayEntreLotes: 600000, // 10 minutos entre lotes (600000ms) - ANTI-BAN
+    tamanhoLote: 10, // 10 mensagens por lote - ANTI-BAN
+    horarioInicio: '00:00', // Início do envio
+    horarioFim: '23:59', // Fim do envio
+    enviarApenasDuranteHorario: false // 24/7 - sem restrição de horário
 };
 
 // === INICIALIZAÇÃO DO CLIENT ===
