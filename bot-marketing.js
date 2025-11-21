@@ -203,14 +203,35 @@ async function registrarEnvio(numero, status, detalhes = '', tipoCampanha = 'amb
     return registro;
 }
 
+// Função auxiliar para timeout em promises
+function comTimeout(promise, ms, mensagemErro = 'Timeout') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(mensagemErro)), ms)
+        )
+    ]);
+}
+
 // Enviar mensagens para um número (grupo, canal ou ambos)
 async function enviarMensagens(numero, tipoCampanha = 'ambos') {
     try {
         // Formatar número (adicionar @c.us se necessário)
         const numeroFormatado = numero.includes('@c.us') ? numero : `${numero}@c.us`;
 
-        // Verificar se o número existe
-        const contato = await client.getNumberId(numeroFormatado);
+        // Verificar se o número existe (com timeout de 30 segundos)
+        let contato;
+        try {
+            contato = await comTimeout(
+                client.getNumberId(numeroFormatado),
+                30000,
+                'Timeout ao verificar número'
+            );
+        } catch (timeoutError) {
+            console.log(`   ⏱️ Timeout ao verificar: ${numero}`);
+            await registrarEnvio(numero, 'falha', 'Timeout na verificação', tipoCampanha);
+            return { sucesso: false, motivo: 'timeout' };
+        }
 
         if (!contato) {
             console.log(`   ❌ Número inválido/não existe: ${numero}`);
